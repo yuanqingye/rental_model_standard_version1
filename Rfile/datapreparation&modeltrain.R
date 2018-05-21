@@ -65,39 +65,44 @@ main = function(){
   MSE.all.MALLS.time = merge(MSE.all.MALLS,mall_view_time,by.x = "mall_name",by.y = "mall_names",all.x = TRUE)
 }
 
-main2 = function(timespan = 6){
-  cross_result = makeCrossValidation(timespan)
-  e = new.env()
-  e$rent_data_year =  cross_result[[1]]
-  e$MSE.all.MALLS = cross_result[[2]]
+main2 = function(timespan = 12,dest_date = 201712){
+  #Train rf,nn,svm,gbm model and do cross validation for test set(last complete available record)
+  cross_result = makeCrossValidation(timespan,dest_date)
+  rent_data_year =  cross_result[[1]]
+  MSE.all.MALLS = cross_result[[2]]
   
-  e$min_index = apply(abs(e$MSE.all.MALLS[,5:8]),1,which.min)
-  e$min_index = as.numeric(e$min_index)
+  rentind = which(names(dest_rent) %in% c("rent"))
+  dest_rent = rent_data_year[[6]]
+  dest_mall_names = rent_data_year[[3]]
   
-  e$rentind = which(names(dest_rent) %in% c("rent"))
-  e$dest_rent = e$rent_data_year[[6]]
-  e$dest_mall_names = e$rent_data_year[[3]]
-  e$dest_view = predict_by_set(cross_result,e$dest_rent,e$dest_mall_names,e$rentind)
-  e$matrix = as.matrix(e$dest_view[,3:6])
-  # temp_decision = temp[cbind(1:nrow(temp),temp_min_index)]
+  #using trained model,based on dest set to predict
+  dest_view = predict_by_set(cross_result,dest_rent,dest_mall_names,rentind)
+  # matrix = as.matrix(dest_view[,3:6])
+  
+  # suppose you only have part of the result's
+  MSE.all.MALLS_mixed = setDT(MSE.all.MALLS)[dest_view, on="mall_name"]
+  min_index = apply(abs(MSE.all.MALLS_mixed[,c("perc","nn_perc","svm_perc","gbm_perc")]),1,which.min)
+  min_index = as.numeric(min_index)
+  matrix = as.matrix(MSE.all.MALLS_mixed[,c("rf_rent","nn_rent","svm_rent","gbm_rent")])
+  decision = matrix[cbind(1:nrow(dest_view), min_index)]
+  MSE.all.MALLS_final = cbind.data.frame(dest_view,pred_rent = decision)
+  
   # MSE.all.MALLS_mixed = setDT(MSE.all.MALLS)[dest_view, on="mall_name"]
   # MSE.all.MALLS_final = MSE.all.MALLS_mixed[!is.na(pred_rent),]
   # MSE.all.MALLS_final = MSE.all.MALLS_final[,c("rf_rent","nn_rent","svm_rent","gbm_rent")]
   # MSE.all.MALLS_final = as.matrix(MSE.all.MALLS_final)
-  e$decision = e$matrix[cbind(1:nrow(e$dest_view), e$min_index)]
-  e$MSE.all.MALLS_final = cbind.data.frame(e$dest_view,pred_rent = e$decision)
-  second_part = e$MSE.all.MALLS_final[e$MSE.all.MALLS_final$mall_name %in%un_mature_mall,]
-  second_part = cbind.data.frame(second_part$mall_name,second_part[,-1]*2)
+  decision = matrix[cbind(1:nrow(dest_view), min_index)]
+  un_mature_mall = rent_data_year[[7]]
+  MSE.all.MALLS_final = cbind.data.frame(dest_view,pred_rent = decision)
+  second_part = MSE.all.MALLS_final[MSE.all.MALLS_final$mall_name %in%un_mature_mall,]
+  second_part = cbind.data.frame(mall_name = second_part$mall_name,second_part[,-1]*2)
   second_part$rent = NULL
-  second_part = data.table(second_part)
-  setnames(second_part,"V1","mall_name")
-  MSE.all.MALLS_final$pred_rent = MSE.all.MALLS_final$temp_decision
-  MSE.all.MALLS_final$temp_decision = NULL
   final_result = rbind(MSE.all.MALLS_final,second_part)
+  return(final_result)
   }
 
-makeCrossValidation = function(timespan = 12){
-  rent_year_data = getyearModeData(timespan)
+makeCrossValidation = function(timespan = 12,dest_date = 201712){
+  rent_year_data = getyearModeData(timespan,dest_date)
   train_rent = rent_year_data[[4]]
   test_rent = rent_year_data[[5]]
   dest_rent = rent_year_data[[6]]
@@ -156,15 +161,11 @@ getMisplacedData = function(file_location = "~/data/rental_raw_data.csv",test_ti
   return(result)
 }
 
-getyearModeData = function(timespan = 12,file_location = "~/data/rental_raw_data.csv",dest_date = 201712){
+getyearModeData = function(timespan = 12,dest_date = 201712,file_location = "~/data/rental_raw_data.csv"){
   rent_data_month_raw = read.csv(file_location,stringsAsFactors = FALSE,fileEncoding = "GBK")
   rent_data_month_raw = data.table(rent_data_month_raw)
   rent_data_month_raw$MALL_NAME = enc2utf8(rent_data_month_raw$MALL_NAME)
   rent_data_month = rent_data_month_raw[MALL_NAME != "昆明广福路商场",]
-  # rent_data_month[,.SD[1:(.N-12),by = "MALL_NAME"]]
-  # rent_data_month[,seq := 1:.N,by = "MALL_NAME"]
-  # rent_data_month[,getYearPara(DATE_ID,min),by = "MALL_NAME"]
-  # View(rent_data_1219[,.(startmon = getYearPara(date_id,min)),by = "mall_name"])
   unuse_col = c("MALL_NAME","MALL_CODE","YEAR","city","OPEN_DATE")
   sum_col = c("CUSTOMER_NUM","SALE","rent")
   max_col = c("AGE","DATE_ID")
@@ -182,7 +183,7 @@ getyearModeData = function(timespan = 12,file_location = "~/data/rental_raw_data
   rent_data_year$predprice.rent = NULL
   # base_rent = rent_data_year[,!(names(rent_data_year)%in%c("mall_name","date_id"))]
   dest_rent = rent_data_year[DATE_ID == dest_date,]
-  rest_rent = rent_data_year[!is.na(rent),]
+  rest_rent = rent_data_year[!is.na(rent)&(DATE_ID < dest_date),]
   test_rent = rest_rent[,.SD[.N,],by = "MALL_NAME"]
   train_rent = rest_rent[,.SD[1:(.N-1),],by = "MALL_NAME"]
   train_mall_names = train_rent$MALL_NAME
@@ -194,7 +195,7 @@ getyearModeData = function(timespan = 12,file_location = "~/data/rental_raw_data
   train_rent = data.frame(train_rent)
   test_rent = data.frame(test_rent)
   dest_rent = data.frame(dest_rent)
-  result = list(train_mall_names,test_mall_names,dest_mall_names,train_rent,test_rent,dest_rent)
+  result = list(train_mall_names,test_mall_names,dest_mall_names,train_rent,test_rent,dest_rent,un_mature_mall)
   return(result)
 }
 
