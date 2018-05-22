@@ -66,38 +66,12 @@ main = function(){
 }
 
 main2 = function(timespan = 12,dest_date = 201712){
-  #Train rf,nn,svm,gbm model and do cross validation for test set(last complete available record)
-  cross_result = makeCrossValidation(timespan,dest_date)
-  rent_data_year =  cross_result[[1]]
-  MSE.all.MALLS = cross_result[[2]]
-  
-  rentind = which(names(dest_rent) %in% c("rent"))
-  dest_rent = rent_data_year[[6]]
-  dest_mall_names = rent_data_year[[3]]
-  
-  #using trained model,based on dest set to predict
-  dest_view = predict_by_set(cross_result,dest_rent,dest_mall_names,rentind)
-  # matrix = as.matrix(dest_view[,3:6])
-  
-  # suppose you only have part of the result's
-  MSE.all.MALLS_mixed = setDT(MSE.all.MALLS)[dest_view, on="mall_name"]
-  min_index = apply(abs(MSE.all.MALLS_mixed[,c("perc","nn_perc","svm_perc","gbm_perc")]),1,which.min)
-  min_index = as.numeric(min_index)
-  matrix = as.matrix(MSE.all.MALLS_mixed[,c("rf_rent","nn_rent","svm_rent","gbm_rent")])
-  decision = matrix[cbind(1:nrow(dest_view), min_index)]
-  MSE.all.MALLS_final = cbind.data.frame(dest_view,pred_rent = decision)
-  
-  # MSE.all.MALLS_mixed = setDT(MSE.all.MALLS)[dest_view, on="mall_name"]
-  # MSE.all.MALLS_final = MSE.all.MALLS_mixed[!is.na(pred_rent),]
-  # MSE.all.MALLS_final = MSE.all.MALLS_final[,c("rf_rent","nn_rent","svm_rent","gbm_rent")]
-  # MSE.all.MALLS_final = as.matrix(MSE.all.MALLS_final)
-  decision = matrix[cbind(1:nrow(dest_view), min_index)]
-  un_mature_mall = rent_data_year[[7]]
-  MSE.all.MALLS_final = cbind.data.frame(dest_view,pred_rent = decision)
-  second_part = MSE.all.MALLS_final[MSE.all.MALLS_final$mall_name %in%un_mature_mall,]
+  first_result = calModelResultOnTimespan(timespan,dest_date)
+  first_part = first_result[[1]][!(mall_name %in% first_result[[2]]),]
+  second_result = calModelResultOnTimespan(timespan/2,dest_date,first_result[[2]])
+  second_part = second_result[[1]][!(mall_name %in% second_result[[2]]),]
   second_part = cbind.data.frame(mall_name = second_part$mall_name,second_part[,-1]*2)
-  second_part$rent = NULL
-  final_result = rbind(MSE.all.MALLS_final,second_part)
+  final_result = rbindlist(list(first_part[!is.na(pred_rent),],second_part),use.names=TRUE,fill = TRUE)
   return(final_result)
   }
 
@@ -175,8 +149,8 @@ getyearModeData = function(timespan = 12,dest_date = 201712,file_location = "~/d
   future_col = c("rent")
   freeze_col = colnames(rent_data_month)[!(colnames(rent_data_month) %in% c(unuse_col,sum_col,max_col,avg_col,future_col))]
   rent_data_year = rent_data_month[,c(lapply(.SD[,sum_col,with=FALSE],getYearPara,sum,timespan),lapply(.SD[,avg_col,with=FALSE],getYearPara,mean,timespan),lapply(.SD[,max_col,with = FALSE],getYearPara,max,timespan),"predprice"=lapply(.SD[,future_col,with = FALSE],getYearReal,sum,timespan),.SD[.N,freeze_col,with=FALSE]),by = "MALL_NAME"]
-  # setnames(rent_data_year,"predprice.finalprice","predprice")
   un_mature_mall = rent_data_year[,.(record_num = .N),by = MALL_NAME][record_num<=timespan,]$MALL_NAME
+  infant_mall = unique(rent_data_month[,.(record_num = .N),by = MALL_NAME][record_num<timespan,]$MALL_NAME)
   setnames(rent_data_year,"rent","current_rent")
   rent_data_year[!(MALL_NAME %in% un_mature_mall),rent:=c(predprice.rent[1:(.N-timespan)],rep(NA,timespan)),by = "MALL_NAME"]
   # rent_data_year[(MALL_NAME %in% un_mature_mall),predprice:=NA,by = "MALL_NAME"]
@@ -195,7 +169,35 @@ getyearModeData = function(timespan = 12,dest_date = 201712,file_location = "~/d
   train_rent = data.frame(train_rent)
   test_rent = data.frame(test_rent)
   dest_rent = data.frame(dest_rent)
-  result = list(train_mall_names,test_mall_names,dest_mall_names,train_rent,test_rent,dest_rent,un_mature_mall)
+  result = list(train_mall_names,test_mall_names,dest_mall_names,train_rent,test_rent,dest_rent,un_mature_mall,infant_mall)
+  return(result)
+}
+
+calModelResultOnTimespan <- function(timespan,dest_date,mall_selected = NULL) {
+  #Train rf,nn,svm,gbm model and do cross validation for test set(last complete available record)
+  cross_result = makeCrossValidation(timespan,dest_date)
+  rent_data_year =  cross_result[[1]]
+  MSE.all.MALLS = cross_result[[2]]
+  
+  rentind = which(names(dest_rent) %in% c("rent"))
+  dest_rent = rent_data_year[[6]]
+  dest_mall_names = rent_data_year[[3]]
+  un_mature_mall = rent_data_year[[7]]
+  
+  #using trained model,based on dest set to predict
+  dest_view = predict_by_set(cross_result,dest_rent,dest_mall_names,rentind)
+  
+  # suppose you only have part of the result's
+  MSE.all.MALLS.mixed = setDT(MSE.all.MALLS)[dest_view, on="mall_name"]
+  if(!is.null(mall_selected)){
+    MSE.all.MALLS.mixed = MSE.all.MALLS.mixed[mall_name %in% mall_selected,]
+  }
+  min_index = apply(abs(MSE.all.MALLS.mixed[,c("perc","nn_perc","svm_perc","gbm_perc")]),1,which.min)
+  min_index = as.numeric(min_index)
+  matrix = as.matrix(MSE.all.MALLS.mixed[,c("rf_rent","nn_rent","svm_rent","gbm_rent")])
+  decision = matrix[cbind(1:nrow(MSE.all.MALLS.mixed), min_index)]
+  MSE.all.MALLS.final = cbind.data.frame(MSE.all.MALLS.mixed[,c("mall_name","rf_rent","nn_rent","svm_rent","gbm_rent")],pred_rent = decision)
+  result = list(MSE.all.MALLS.final,un_mature_mall)
   return(result)
 }
 

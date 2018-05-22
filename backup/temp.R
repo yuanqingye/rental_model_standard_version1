@@ -203,3 +203,8 @@ control <- trainControl(method="repeatedcv", number=10, repeats=3)
 rentModel <- train(rent~., data=train_set, method="rf", preProcess="scale", trControl=control,
                    importance = T)
 Importance <- varImp(rentModel, scale=FALSE)
+
+bar <- function(DT) {
+  DT[, newcol := 1L]
+  DT = rbind(DT,DT)
+}
